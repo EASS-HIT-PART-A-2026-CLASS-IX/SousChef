@@ -6,7 +6,7 @@
 [![Gemini](https://img.shields.io/badge/Gemini-2.5--flash-orange?logo=google)](https://ai.google.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A production-ready REST API for managing recipes — built with **FastAPI**, **SQLModel**, and **SQLite**. Ships with an AI-powered import feature that uses **Google Gemini 2.5 Flash** to extract structured recipes from any URL or free-form text.
+A production-ready REST API for managing recipes — built with **FastAPI**, **SQLModel**, and **SQLite**. Ships with an AI-powered import feature that uses **Google Gemini 2.5 Flash** to extract structured recipes from any URL or free-form text, including **Instagram Reels, Facebook posts, and YouTube videos**. All AI-extracted content is returned in Hebrew.
 
 > *Your AI sous-chef in the terminal.*
 
@@ -21,8 +21,9 @@ A production-ready REST API for managing recipes — built with **FastAPI**, **S
 - **Nested creation** — supply ingredients and steps inline when creating a recipe
 - **Category filtering** on the list endpoint (`?category=breakfast`)
 - **Cascade deletes** — removing a recipe removes all its ingredients and steps
-- **AI import from URL** — fetches a page, extracts schema.org/Recipe JSON-LD or visible text, and lets Gemini structure it
+- **AI import from URL** — auto-detects social media links (Instagram, Facebook, YouTube) or fetches any recipe page via JSON-LD / visible text scraping
 - **AI import from text/image** — paste raw text or upload a photo; Gemini extracts the recipe
+- **Hebrew output** — all AI-imported recipes are extracted in Hebrew
 - **Docker + Docker Compose** — fully containerised, SQLite persisted via volume
 - **34 pytest tests** — in-memory DB, all external calls mocked, zero network access required
 
@@ -38,7 +39,8 @@ souschef/
 │   ├── database.py      # SQLite engine + get_session dependency
 │   ├── models.py        # SQLModel table models (Recipe, Ingredient, Step)
 │   ├── schemas.py       # Pydantic request/response schemas
-│   └── ai.py            # Gemini 2.5 Flash integration + JSON-LD scraping
+│   ├── ai.py            # Gemini 2.5 Flash integration + JSON-LD scraping
+│   └── social.py        # Social media description extractor (yt-dlp)
 ├── tests/
 │   └── test_recipes.py  # 34 pytest tests across 8 test classes
 ├── Dockerfile
@@ -183,13 +185,14 @@ All 34 tests use an **in-memory SQLite database** and **mock every external call
 
 #### How AI import works
 
-`/recipes/from-url` uses a two-stage extraction strategy:
-1. **JSON-LD first** — scans the page for a `schema.org/Recipe` object (embedded by most major recipe sites). When found, this clean structured data is sent directly to Gemini.
-2. **Visible text fallback** — strips nav/scripts/footers and sends the remaining text (+ `og:image` if available) to Gemini.
+`/recipes/from-url` uses a three-stage extraction strategy, tried in order:
+1. **Social media** — if the URL is from Instagram, Facebook, or YouTube, the post/reel/video description is fetched via `yt-dlp` and sent to Gemini.
+2. **JSON-LD** — scans the page for a `schema.org/Recipe` object (embedded by most major recipe sites). When found, this clean structured data is sent directly to Gemini.
+3. **Visible text fallback** — strips nav/scripts/footers and sends the remaining text (+ `og:image` if available) to Gemini.
 
 `/recipes/from-text` accepts `multipart/form-data` with a `text` field and an optional `image` file.
 
-> **Note:** Instagram, Facebook, and TikTok actively block scraping. For those, copy the recipe text and use `/recipes/from-text` instead.
+All extracted recipes are returned with fields in Hebrew.
 
 ---
 
@@ -202,8 +205,8 @@ All 34 tests use an **in-memory SQLite database** and **mock every external call
 curl -s -X POST http://localhost:8000/recipes \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Classic Omelette",
-    "category": "breakfast",
+    "name": "חביתה קלאסית",
+    "category": "ארוחת בוקר",
     "prep_time": 5,
     "cook_time": 5,
     "servings": 1,
@@ -229,7 +232,7 @@ curl -s -X POST http://localhost:8000/recipes \
 curl -s http://localhost:8000/recipes | python -m json.tool
 
 # Only breakfast recipes
-curl -s "http://localhost:8000/recipes?category=breakfast" | python -m json.tool
+curl -s "http://localhost:8000/recipes?category=ארוחת%20בוקר" | python -m json.tool
 ```
 </details>
 
@@ -248,9 +251,16 @@ curl -s -X PUT http://localhost:8000/recipes/1 \
 <summary><b>AI import from a URL</b></summary>
 
 ```bash
+# Any recipe website
 curl -s -X POST http://localhost:8000/recipes/from-url \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.allrecipes.com/recipe/10813/best-chocolate-chip-cookies/"}' \
+  | python -m json.tool
+
+# Instagram Reel
+curl -s -X POST http://localhost:8000/recipes/from-url \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.instagram.com/reel/DWcViuMiK0u/"}' \
   | python -m json.tool
 ```
 </details>
@@ -300,6 +310,7 @@ curl -s -X DELETE http://localhost:8000/recipes/1 -w "Status: %{http_code}\n"
 | AI extraction | [Google Gemini 2.5 Flash](https://ai.google.dev/) via `google-genai` |
 | HTTP client | [httpx](https://www.python-httpx.org/) |
 | HTML parsing | [BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/) |
+| Social media | [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Instagram, Facebook, YouTube) |
 | Package manager | [uv](https://docs.astral.sh/uv/) |
 | Testing | [pytest](https://pytest.org/) |
 | Containerisation | Docker + Docker Compose |

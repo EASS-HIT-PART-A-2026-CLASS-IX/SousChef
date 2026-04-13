@@ -10,6 +10,7 @@ import os
 from typing import Optional
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from fastapi import HTTPException
 
@@ -19,12 +20,13 @@ logger = logging.getLogger(__name__)
 
 EXTRACTION_PROMPT = """\
 You are a recipe extraction assistant. Extract the recipe from the following content \
-and return it as a JSON object with this exact structure:
+and return it as a JSON object with this exact structure. \
+All text fields (name, description, category, ingredient names, and step instructions) must be written in Hebrew.
 
 {{
   "name": "...",
   "description": "...",
-  "category": "breakfast|lunch|dinner|dessert|snack|other",
+  "category": "ארוחת בוקר|ארוחת צהריים|ארוחת ערב|קינוח|חטיף|אחר",
   "prep_time": <int minutes or null>,
   "cook_time": <int minutes or null>,
   "servings": <int or null>,
@@ -93,6 +95,26 @@ def _parse_gemini_response(raw: str) -> dict:
     return data
 
 
+_MIME_SIGNATURES: list[tuple[bytes, str]] = [
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"RIFF", "image/webp"),   # RIFF....WEBP
+]
+
+
+def _detect_mime_type(data: bytes) -> Optional[str]:
+    """Return the MIME type of *data* based on its magic bytes, or None."""
+    for signature, mime in _MIME_SIGNATURES:
+        if data[:len(signature)] == signature:
+            return mime
+    # WebP has 4 bytes of size between RIFF and WEBP
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 def extract_recipe_from_text(text: str, image_bytes: Optional[bytes] = None) -> dict:
     """
     Call Gemini with the supplied text (and optional raw image bytes).
@@ -104,17 +126,40 @@ def extract_recipe_from_text(text: str, image_bytes: Optional[bytes] = None) -> 
     parts: list = [prompt]
 
     if image_bytes:
-        parts.append(
-            types.Part.from_bytes(
-                data=image_bytes,
-                mime_type="image/jpeg",
+        mime_type = _detect_mime_type(image_bytes)
+        if mime_type is None:
+            logger.warning("Uploaded file does not appear to be a supported image — skipping")
+        else:
+            parts.append(
+                types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type=mime_type,
+                )
             )
-        )
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=parts,
-    )
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=parts,
+        )
+    except genai_errors.ServerError as e:
+        logger.warning("Gemini server error: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="The AI service is temporarily unavailable due to high demand. Please try again in a moment.",
+        )
+    except genai_errors.ClientError as e:
+        logger.warning("Gemini client error: %s", e)
+        raise HTTPException(
+            status_code=502,
+            detail="The AI service returned an error. Please check your API key and try again.",
+        )
+    except Exception as e:
+        logger.error("Unexpected error calling Gemini: %s", e)
+        raise HTTPException(
+            status_code=502,
+            detail="An unexpected error occurred while contacting the AI service. Please try again.",
+        )
     return _parse_gemini_response(response.text)
 
 
@@ -156,12 +201,37 @@ async def extract_recipe_from_url(url: str) -> dict:
     """
     Fetch the page at *url*, extract recipe content, then call Gemini.
     Extraction priority:
-      1. schema.org/Recipe JSON-LD (embedded structured data — most reliable)
-      2. Visible text from the main content area
+      1. Social media post description (Instagram / Facebook / YouTube)
+      2. schema.org/Recipe JSON-LD (embedded structured data — most reliable)
+      3. Visible text from the main content area
     Raises HTTPException 422 if the page cannot be fetched.
     """
+    import asyncio
+
     import httpx
     from bs4 import BeautifulSoup
+
+    from app.social import detect_platform, fetch_social_description
+
+    # ── Strategy 1: social media platforms ───────────────────────────────────
+    if detect_platform(url):
+        try:
+            loop = asyncio.get_event_loop()
+            description = await loop.run_in_executor(None, fetch_social_description, url)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Could not fetch social media post: {exc}",
+            )
+        if not description.strip():
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "The post description is empty. "
+                    "Please paste the recipe text using /recipes/from-text instead."
+                ),
+            )
+        return extract_recipe_from_text(description)
 
     headers = {
         "User-Agent": (
@@ -184,12 +254,12 @@ async def extract_recipe_from_url(url: str) -> dict:
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # ── Strategy 1: schema.org/Recipe JSON-LD ────────────────────────────────
+    # ── Strategy 2: schema.org/Recipe JSON-LD ────────────────────────────────
     jsonld_text = _extract_jsonld_recipe(soup)
     if jsonld_text:
         return extract_recipe_from_text(jsonld_text)
 
-    # ── Strategy 2: visible text fallback ────────────────────────────────────
+    # ── Strategy 3: visible text fallback ────────────────────────────────────
     logger.info("No JSON-LD recipe found, falling back to visible text extraction")
 
     for tag in soup(["script", "style", "noscript", "header", "footer", "nav"]):

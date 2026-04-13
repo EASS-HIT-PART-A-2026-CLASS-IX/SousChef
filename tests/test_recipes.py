@@ -50,7 +50,7 @@ def client_fixture(session: Session):
 SAMPLE_RECIPE_PAYLOAD = {
     "name": "Pancakes",
     "description": "Fluffy breakfast pancakes",
-    "category": "breakfast",
+    "category": "ארוחת בוקר",
     "prep_time": 10,
     "cook_time": 15,
     "servings": 4,
@@ -68,7 +68,7 @@ SAMPLE_RECIPE_PAYLOAD = {
 GEMINI_RECIPE_DICT = {
     "name": "Chocolate Chip Cookies",
     "description": "Classic cookies",
-    "category": "dessert",
+    "category": "קינוח",
     "prep_time": 15,
     "cook_time": 12,
     "servings": 24,
@@ -96,7 +96,7 @@ class TestCreateRecipe:
         resp = client.post("/recipes", json=SAMPLE_RECIPE_PAYLOAD)
         data = resp.json()
         assert data["name"] == "Pancakes"
-        assert data["category"] == "breakfast"
+        assert data["category"] == "ארוחת בוקר"
         assert data["prep_time"] == 10
         assert data["cook_time"] == 15
         assert data["servings"] == 4
@@ -133,17 +133,17 @@ class TestListRecipes:
         assert len(resp.json()) == 2
 
     def test_list_recipes_filter_by_category(self, client: TestClient):
-        client.post("/recipes", json={**SAMPLE_RECIPE_PAYLOAD, "category": "breakfast"})
-        client.post("/recipes", json={**SAMPLE_RECIPE_PAYLOAD, "name": "Pasta", "category": "dinner"})
-        resp = client.get("/recipes?category=breakfast")
+        client.post("/recipes", json={**SAMPLE_RECIPE_PAYLOAD, "category": "ארוחת בוקר"})
+        client.post("/recipes", json={**SAMPLE_RECIPE_PAYLOAD, "name": "Pasta", "category": "ארוחת ערב"})
+        resp = client.get("/recipes?category=ארוחת בוקר")
         assert resp.status_code == 200
         results = resp.json()
         assert len(results) == 1
-        assert results[0]["category"] == "breakfast"
+        assert results[0]["category"] == "ארוחת בוקר"
 
     def test_list_recipes_filter_no_match(self, client: TestClient):
-        client.post("/recipes", json={**SAMPLE_RECIPE_PAYLOAD, "category": "breakfast"})
-        resp = client.get("/recipes?category=dessert")
+        client.post("/recipes", json={**SAMPLE_RECIPE_PAYLOAD, "category": "ארוחת בוקר"})
+        resp = client.get("/recipes?category=קינוח")
         assert resp.status_code == 200
         assert resp.json() == []
 
@@ -304,7 +304,7 @@ class TestFromText:
         assert resp.status_code == 201
         data = resp.json()
         assert data["name"] == "Chocolate Chip Cookies"
-        assert data["category"] == "dessert"
+        assert data["category"] == "קינוח"
         assert len(data["ingredients"]) == 2
         assert len(data["steps"]) == 4
 
@@ -407,3 +407,192 @@ class TestFromURL:
         db_recipe = session.get(Recipe, recipe_id)
         assert db_recipe is not None
         assert db_recipe.name == "Chocolate Chip Cookies"
+
+    def test_from_url_invalid_url_returns_422(self, client: TestClient):
+        """A non-HTTP URL (or plain garbage) must be rejected before any fetch."""
+        resp = client.post(
+            "/recipes/from-url",
+            json={"url": "not-a-url-at-all"},
+        )
+        assert resp.status_code == 422
+
+    def test_from_url_non_http_scheme_returns_422(self, client: TestClient):
+        """ftp:// or file:// URLs must be rejected."""
+        resp = client.post(
+            "/recipes/from-url",
+            json={"url": "ftp://example.com/recipe.txt"},
+        )
+        assert resp.status_code == 422
+
+
+# ── Validation edge-case tests ────────────────────────────────────────────────
+
+class TestValidation:
+    # ── Recipe name ───────────────────────────────────────────────────────────
+    def test_create_empty_name_rejected(self, client: TestClient):
+        resp = client.post("/recipes", json={"name": ""})
+        assert resp.status_code == 422
+
+    def test_create_whitespace_name_rejected(self, client: TestClient):
+        resp = client.post("/recipes", json={"name": "   "})
+        assert resp.status_code == 422
+
+    def test_update_empty_name_rejected(self, client: TestClient):
+        created = client.post("/recipes", json=SAMPLE_RECIPE_PAYLOAD).json()
+        resp = client.put(f"/recipes/{created['id']}", json={"name": ""})
+        assert resp.status_code == 422
+
+    def test_update_whitespace_name_rejected(self, client: TestClient):
+        created = client.post("/recipes", json=SAMPLE_RECIPE_PAYLOAD).json()
+        resp = client.put(f"/recipes/{created['id']}", json={"name": "   "})
+        assert resp.status_code == 422
+
+    # ── Category ──────────────────────────────────────────────────────────────
+    def test_create_invalid_category_rejected(self, client: TestClient):
+        resp = client.post("/recipes", json={"name": "Test", "category": "brunch"})
+        assert resp.status_code == 422
+
+    def test_create_valid_categories_accepted(self, client: TestClient):
+        for cat in ("ארוחת בוקר", "ארוחת צהריים", "ארוחת ערב", "קינוח", "חטיף", "אחר"):
+            resp = client.post("/recipes", json={"name": f"מתכון {cat}", "category": cat})
+            assert resp.status_code == 201, f"Category '{cat}' was unexpectedly rejected"
+
+    def test_update_invalid_category_rejected(self, client: TestClient):
+        created = client.post("/recipes", json=SAMPLE_RECIPE_PAYLOAD).json()
+        resp = client.put(f"/recipes/{created['id']}", json={"category": "brunch"})
+        assert resp.status_code == 422
+
+    # ── Numeric fields ────────────────────────────────────────────────────────
+    def test_create_negative_prep_time_rejected(self, client: TestClient):
+        resp = client.post("/recipes", json={"name": "Test", "prep_time": -1})
+        assert resp.status_code == 422
+
+    def test_create_negative_cook_time_rejected(self, client: TestClient):
+        resp = client.post("/recipes", json={"name": "Test", "cook_time": -5})
+        assert resp.status_code == 422
+
+    def test_create_negative_servings_rejected(self, client: TestClient):
+        resp = client.post("/recipes", json={"name": "Test", "servings": -2})
+        assert resp.status_code == 422
+
+    def test_create_zero_times_accepted(self, client: TestClient):
+        """Zero is a valid value for prep/cook times."""
+        resp = client.post("/recipes", json={"name": "Instant", "prep_time": 0, "cook_time": 0})
+        assert resp.status_code == 201
+
+    # ── Ingredients ───────────────────────────────────────────────────────────
+    def test_ingredient_zero_amount_rejected(self, client: TestClient):
+        recipe = client.post("/recipes", json={"name": "Test"}).json()
+        resp = client.post(
+            f"/recipes/{recipe['id']}/ingredients",
+            json={"name": "salt", "amount": 0, "unit": "tsp"},
+        )
+        assert resp.status_code == 422
+
+    def test_ingredient_negative_amount_rejected(self, client: TestClient):
+        recipe = client.post("/recipes", json={"name": "Test"}).json()
+        resp = client.post(
+            f"/recipes/{recipe['id']}/ingredients",
+            json={"name": "salt", "amount": -1, "unit": "tsp"},
+        )
+        assert resp.status_code == 422
+
+    def test_ingredient_blank_name_rejected(self, client: TestClient):
+        recipe = client.post("/recipes", json={"name": "Test"}).json()
+        resp = client.post(
+            f"/recipes/{recipe['id']}/ingredients",
+            json={"name": "  ", "amount": 1.0, "unit": "cup"},
+        )
+        assert resp.status_code == 422
+
+    def test_ingredient_blank_unit_rejected(self, client: TestClient):
+        recipe = client.post("/recipes", json={"name": "Test"}).json()
+        resp = client.post(
+            f"/recipes/{recipe['id']}/ingredients",
+            json={"name": "flour", "amount": 1.0, "unit": ""},
+        )
+        assert resp.status_code == 422
+
+    # ── Steps ─────────────────────────────────────────────────────────────────
+    def test_step_zero_order_rejected(self, client: TestClient):
+        recipe = client.post("/recipes", json={"name": "Test"}).json()
+        resp = client.post(
+            f"/recipes/{recipe['id']}/steps",
+            json={"order": 0, "instruction": "Do something."},
+        )
+        assert resp.status_code == 422
+
+    def test_step_negative_order_rejected(self, client: TestClient):
+        recipe = client.post("/recipes", json={"name": "Test"}).json()
+        resp = client.post(
+            f"/recipes/{recipe['id']}/steps",
+            json={"order": -1, "instruction": "Do something."},
+        )
+        assert resp.status_code == 422
+
+    def test_step_blank_instruction_rejected(self, client: TestClient):
+        recipe = client.post("/recipes", json={"name": "Test"}).json()
+        resp = client.post(
+            f"/recipes/{recipe['id']}/steps",
+            json={"order": 1, "instruction": "   "},
+        )
+        assert resp.status_code == 422
+
+
+# ── AI dict parsing edge cases ────────────────────────────────────────────────
+
+class TestCreateRecipeFromDict:
+    def test_extra_jsonld_keys_are_ignored(self, client: TestClient):
+        """Gemini JSON-LD responses may include @type, image, author, etc.
+        These must be silently stripped — not crash with TypeError."""
+        gemini_response = {
+            **GEMINI_RECIPE_DICT,
+            "@type": "Recipe",
+            "@context": "https://schema.org",
+            "image": "https://example.com/cookie.jpg",
+            "author": {"@type": "Person", "name": "Jane"},
+            "datePublished": "2024-01-01",
+        }
+        with patch("app.main.extract_recipe_from_text") as mock_extract:
+            mock_extract.return_value = gemini_response
+            resp = client.post(
+                "/recipes/from-text",
+                data={"text": "cookie recipe from structured data"},
+            )
+        assert resp.status_code == 201
+        assert resp.json()["name"] == "Chocolate Chip Cookies"
+
+    def test_ingredients_with_extra_keys_are_saved(self, client: TestClient):
+        """Extra keys in ingredient dicts must be stripped, not cause a crash."""
+        response = {
+            **GEMINI_RECIPE_DICT,
+            "ingredients": [
+                {"name": "flour", "amount": 2.0, "unit": "cups", "notes": "sifted"},
+            ],
+        }
+        with patch("app.main.extract_recipe_from_text") as mock_extract:
+            mock_extract.return_value = response
+            resp = client.post(
+                "/recipes/from-text",
+                data={"text": "cookie recipe"},
+            )
+        assert resp.status_code == 201
+        assert len(resp.json()["ingredients"]) == 1
+
+    def test_ingredients_missing_amount_and_unit_are_saved(self, client: TestClient):
+        """Ingredients with only a name (no amount/unit) are valid — amount and unit are optional."""
+        response = {
+            **GEMINI_RECIPE_DICT,
+            "ingredients": [
+                {"name": "flour", "amount": 2.0, "unit": "cups"},
+                {"name": "מלח לפי הטעם"},   # no amount or unit — valid
+            ],
+        }
+        with patch("app.main.extract_recipe_from_text") as mock_extract:
+            mock_extract.return_value = response
+            resp = client.post(
+                "/recipes/from-text",
+                data={"text": "cookie recipe"},
+            )
+        assert resp.status_code == 201
+        assert len(resp.json()["ingredients"]) == 2

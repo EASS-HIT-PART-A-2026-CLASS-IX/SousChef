@@ -73,22 +73,45 @@ def _build_recipe_read(recipe: Recipe) -> RecipeRead:
     )
 
 
+_RECIPE_FIELDS = {"name", "description", "category", "prep_time", "cook_time", "servings"}
+_INGREDIENT_FIELDS = {"name", "amount", "unit"}
+_STEP_FIELDS = {"order", "instruction"}
+
+
 def _create_recipe_from_dict(data: dict, session: Session) -> Recipe:
     """
     Create a Recipe (plus its Ingredients and Steps) from a plain dict,
     as returned by the Gemini parser.
-    """
-    ingredients_data = data.pop("ingredients", [])
-    steps_data = data.pop("steps", [])
 
-    recipe = Recipe(**data)
+    Only known model fields are extracted from the dict — extra keys that
+    Gemini or JSON-LD may include (e.g. @type, image, author) are silently
+    ignored to prevent TypeError crashes.
+    """
+    ingredients_data = data.get("ingredients") or []
+    steps_data = data.get("steps") or []
+
+    recipe_kwargs = {k: v for k, v in data.items() if k in _RECIPE_FIELDS}
+    recipe = Recipe(**recipe_kwargs)
     session.add(recipe)
     session.flush()  # populate recipe.id
 
     for ing in ingredients_data:
-        session.add(Ingredient(recipe_id=recipe.id, **ing))
+        if not isinstance(ing, dict):
+            continue
+        ing_kwargs = {k: v for k, v in ing.items() if k in _INGREDIENT_FIELDS}
+        # Only name is required; amount and unit are optional
+        if not ing_kwargs.get("name"):
+            continue
+        session.add(Ingredient(recipe_id=recipe.id, **ing_kwargs))
+
     for step in steps_data:
-        session.add(Step(recipe_id=recipe.id, **step))
+        if not isinstance(step, dict):
+            continue
+        step_kwargs = {k: v for k, v in step.items() if k in _STEP_FIELDS}
+        # Skip steps missing required fields
+        if not all(k in step_kwargs for k in _STEP_FIELDS):
+            continue
+        session.add(Step(recipe_id=recipe.id, **step_kwargs))
 
     session.commit()
     session.refresh(recipe)
@@ -164,7 +187,7 @@ def update_recipe(
     return _build_recipe_read(recipe)
 
 
-@app.delete("/recipes/{recipe_id}", status_code=204)
+@app.delete("/recipes/{recipe_id}", status_code=204, response_model=None)
 def delete_recipe(
     recipe_id: int,
     session: Session = Depends(get_session),
@@ -192,7 +215,7 @@ def add_ingredient(
     return IngredientRead.model_validate(ingredient)
 
 
-@app.delete("/ingredients/{ingredient_id}", status_code=204)
+@app.delete("/ingredients/{ingredient_id}", status_code=204, response_model=None)
 def delete_ingredient(
     ingredient_id: int,
     session: Session = Depends(get_session),
@@ -222,7 +245,7 @@ def add_step(
     return StepRead.model_validate(step)
 
 
-@app.delete("/steps/{step_id}", status_code=204)
+@app.delete("/steps/{step_id}", status_code=204, response_model=None)
 def delete_step(
     step_id: int,
     session: Session = Depends(get_session),
@@ -246,7 +269,7 @@ async def import_from_url(
     Fetch a URL, extract visible text (+ og:image), and use Gemini to parse
     a recipe from the content.
     """
-    recipe_data = await extract_recipe_from_url(payload.url)
+    recipe_data = await extract_recipe_from_url(str(payload.url))
     recipe = _create_recipe_from_dict(recipe_data, session)
     return _build_recipe_read(recipe)
 
