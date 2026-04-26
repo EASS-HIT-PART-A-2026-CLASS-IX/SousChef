@@ -11,9 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
 
+from app import ai
+from app.ai import RECIPE_JSON_SCHEMA
 from app.database import get_session
 from app.main import app
 from app.models import Ingredient, Recipe, Step
@@ -293,6 +295,20 @@ class TestSteps:
 # ── AI Import tests ───────────────────────────────────────────────────────────
 
 class TestFromText:
+    def test_from_text_runs_extractor_in_threadpool(self, client: TestClient):
+        with patch("app.main.extract_recipe_from_text") as mock_extract, patch(
+            "app.main.run_in_threadpool",
+            new_callable=AsyncMock,
+        ) as mock_run:
+            mock_run.return_value = dict(GEMINI_RECIPE_DICT)
+            resp = client.post(
+                "/recipes/from-text",
+                data={"text": "Chocolate chip cookies recipe..."},
+            )
+
+        assert resp.status_code == 201
+        mock_run.assert_awaited_once_with(mock_extract, "Chocolate chip cookies recipe...", None)
+
     def test_from_text_happy_path(self, client: TestClient):
         """Mock Gemini; verify recipe is created and returned."""
         with patch("app.main.extract_recipe_from_text") as mock_extract:
@@ -366,6 +382,20 @@ class TestFromText:
 
 
 class TestFromURL:
+    def test_from_url_preview_returns_draft_without_saving(self, client: TestClient, session: Session):
+        with patch("app.main.extract_recipe_from_url", new_callable=AsyncMock) as mock_extract:
+            mock_extract.return_value = dict(GEMINI_RECIPE_DICT)
+            resp = client.post(
+                "/recipes/from-url/preview",
+                json={"url": "https://example.com/recipe"},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "Chocolate Chip Cookies"
+        assert "id" not in data
+        assert session.exec(select(Recipe)).all() == []
+
     def test_from_url_happy_path(self, client: TestClient):
         """Mock httpx fetch + Gemini; verify recipe created."""
         with patch("app.main.extract_recipe_from_url", new_callable=AsyncMock) as mock_extract:
@@ -423,6 +453,89 @@ class TestFromURL:
             json={"url": "ftp://example.com/recipe.txt"},
         )
         assert resp.status_code == 422
+
+
+class TestUrlExtractionThreading:
+    @pytest.mark.asyncio
+    async def test_extract_recipe_from_url_offloads_jsonld_extraction(self):
+        html_doc = """
+        <html>
+            <head>
+                <script type="application/ld+json">
+                    {"@type":"Recipe","name":"עוגיות"}
+                </script>
+            </head>
+            <body>ignored</body>
+        </html>
+        """
+
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.text = html_doc
+
+        client = AsyncMock()
+        client.get.return_value = response
+
+        client_cm = AsyncMock()
+        client_cm.__aenter__.return_value = client
+        client_cm.__aexit__.return_value = False
+
+        with patch("app.ai.httpx.AsyncClient", return_value=client_cm), patch(
+            "asyncio.to_thread",
+            new_callable=AsyncMock,
+        ) as mock_to_thread:
+            mock_to_thread.return_value = dict(GEMINI_RECIPE_DICT)
+            result = await ai.extract_recipe_from_url("https://example.com/recipe")
+
+        assert result["name"] == GEMINI_RECIPE_DICT["name"]
+        mock_to_thread.assert_awaited_once()
+        args = mock_to_thread.await_args.args
+        assert args[0] is ai.extract_recipe_from_text
+        assert '"@type": "Recipe"' in args[1]
+
+
+class TestAIJsonParsing:
+    def test_parse_recipe_json_accepts_python_style_object(self):
+        raw = """
+        ```json
+        {
+            'name': 'עוגיות טחינה',
+            'description': 'מתכון פריך',
+            'ingredients': [{'name': 'טחינה', 'amount': 1, 'unit': 'כוס'},],
+            'steps': [{'order': 1, 'instruction': 'לערבב'}],
+        }
+        ```
+        """
+
+        data = ai._parse_recipe_json(raw)
+
+        assert data["name"] == "עוגיות טחינה"
+        assert data["ingredients"][0]["name"] == "טחינה"
+
+    def test_parse_recipe_json_salvages_truncated_recipe_object(self):
+        raw = """
+        {
+          "name": "מאפינס אוכמניות",
+          "description": "מאפינס רכים ואווריריים",
+          "category": "קינוח",
+          "prep_time": null,
+          "cook_time": 20,
+          "servings": null,
+          "ingredients": [
+            {"name": "קמח שקדים", "amount": 2, "unit": "כוסות"},
+            {"name": "אוכמניות", "amount": 1, "unit": "כוס"},
+            {"name": "דבש (לק
+        """
+
+        data = ai._parse_recipe_json(raw)
+
+        assert data["name"] == "מאפינס אוכמניות"
+        assert data["category"] == "קינוח"
+        assert data["cook_time"] == 20
+        assert data["ingredients"] == [
+            {"name": "קמח שקדים", "amount": 2.0, "unit": "כוסות"},
+            {"name": "אוכמניות", "amount": 1.0, "unit": "כוס"},
+        ]
 
 
 # ── Validation edge-case tests ────────────────────────────────────────────────
@@ -596,3 +709,158 @@ class TestCreateRecipeFromDict:
             )
         assert resp.status_code == 201
         assert len(resp.json()["ingredients"]) == 2
+
+
+class TestOllamaJsonGuards:
+    def test_recipe_schema_bounds_free_text_fields(self):
+        ingredient_schema = RECIPE_JSON_SCHEMA["properties"]["ingredients"]["items"]["properties"]
+        step_schema = RECIPE_JSON_SCHEMA["properties"]["steps"]["items"]["properties"]
+
+        assert ingredient_schema["name"]["maxLength"] == 80
+        assert ingredient_schema["unit"]["anyOf"][0]["maxLength"] == 24
+        assert step_schema["instruction"]["maxLength"] == 280
+
+    def test_ollama_generate_retries_without_schema_when_response_is_empty(self):
+        first = MagicMock()
+        first.raise_for_status.return_value = None
+        first.json.return_value = {"response": ""}
+
+        second = MagicMock()
+        second.raise_for_status.return_value = None
+        second.json.return_value = {"response": '{"name":"שקשוקה"}'}
+
+        with patch("app.ai.httpx.post", side_effect=[first, second]) as mock_post:
+            result = ai._ollama_generate(
+                "Return recipe JSON",
+                schema={"type": "object", "properties": {"name": {"type": "string"}}},
+            )
+
+        assert result == '{"name":"שקשוקה"}'
+        assert mock_post.call_count == 2
+        assert mock_post.call_args_list[0].kwargs["json"]["format"]["type"] == "object"
+        assert "format" not in mock_post.call_args_list[1].kwargs["json"]
+
+
+class TestStagedSuggestRecipe:
+    def test_suggest_recipe_builds_context_across_stages(self):
+        responses = iter([
+            {"name": "שקשוקה"},
+            {"description": "מנה ישראלית קלאסית עם עגבניות וביצים."},
+            {"category": "ארוחת ערב", "prep_time": 10, "cook_time": 20, "servings": 3},
+            {"ingredients": [{"name": "עגבניות", "amount": 4, "unit": "יח'"}]},
+            {"steps": [{"order": 1, "instruction": "מבשלים את הרוטב."}]},
+        ])
+        prompts: list[str] = []
+
+        def fake_generate(prompt: str, schema: dict):
+            prompts.append(prompt)
+            return next(responses)
+
+        with patch("app.ai._generate_json_with_schema", side_effect=fake_generate):
+            recipe = ai.suggest_recipe()
+
+        assert recipe["name"] == "שקשוקה"
+        assert recipe["description"] == "מנה ישראלית קלאסית עם עגבניות וביצים."
+        assert recipe["category"] == "ארוחת ערב"
+        assert recipe["ingredients"][0]["name"] == "עגבניות"
+        assert recipe["steps"][0]["instruction"] == "מבשלים את הרוטב."
+        assert len(prompts) == 5
+        assert '"name": "שקשוקה"' in prompts[1]
+        assert '"description": "מנה ישראלית קלאסית עם עגבניות וביצים."' in prompts[2]
+        assert '"ingredients": [' in prompts[4]
+
+    def test_suggest_recipe_stage_retries_invalid_output_then_succeeds(self):
+        responses = iter([
+            {"name": "   "},
+            {"name": "שקשוקה"},
+        ])
+
+        with patch("app.ai._generate_json_with_schema", side_effect=lambda prompt, schema: next(responses)):
+            result = ai.suggest_recipe_stage("name", {})
+
+        assert result["stage"] == "name"
+        assert result["patch"] == {"name": "שקשוקה"}
+        assert result["recipe"]["name"] == "שקשוקה"
+
+    def test_suggest_recipe_stage_returns_structured_422_after_final_retry(self):
+        from fastapi import HTTPException as FHE
+
+        with patch("app.ai._generate_json_with_schema", return_value={"name": "   "}):
+            with pytest.raises(FHE) as exc_info:
+                ai.suggest_recipe_stage("name", {})
+
+        exc = exc_info.value
+        assert exc.status_code == 422
+        assert exc.detail["stage"] == "name"
+        assert exc.detail["attempts"] == 3
+        assert "name" in exc.detail["message"].lower()
+
+    def test_ingredient_normalization_drops_invalid_amount_and_unit(self):
+        raw = {
+            "ingredients": [
+                {"name": "מלח", "amount": 0, "unit": "כפית"},
+                {"name": "פלפל", "amount": None, "unit": " "},
+                {"name": "שמן זית", "amount": 2, "unit": "כפות"},
+            ]
+        }
+
+        result = ai._normalize_ingredients_patch(raw)
+
+        assert result["ingredients"][0] == {"name": "מלח", "amount": None, "unit": None}
+        assert result["ingredients"][1] == {"name": "פלפל", "amount": None, "unit": None}
+        assert result["ingredients"][2] == {"name": "שמן זית", "amount": 2.0, "unit": "כפות"}
+
+    def test_step_normalization_renumbers_sequentially(self):
+        raw = {
+            "steps": [
+                {"order": 8, "instruction": "  מערבבים  "},
+                {"order": 2, "instruction": "מגישים"},
+            ]
+        }
+
+        result = ai._normalize_steps_patch(raw)
+
+        assert result["steps"] == [
+            {"order": 1, "instruction": "מערבבים"},
+            {"order": 2, "instruction": "מגישים"},
+        ]
+
+
+class TestSuggestStageEndpoint:
+    def test_stage_endpoint_returns_patch_and_merged_recipe(self, client: TestClient):
+        with patch("app.main.suggest_recipe_stage") as mock_stage:
+            mock_stage.return_value = {
+                "stage": "description",
+                "patch": {"description": "טעים מאוד"},
+                "recipe": {"name": "שקשוקה", "description": "טעים מאוד"},
+                "done": False,
+            }
+            resp = client.post(
+                "/recipes/suggest/stage",
+                json={"stage": "description", "recipe": {"name": "שקשוקה"}},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["patch"] == {"description": "טעים מאוד"}
+        assert resp.json()["recipe"]["name"] == "שקשוקה"
+        assert resp.json()["done"] is False
+
+    def test_stage_endpoint_returns_structured_failure_detail(self, client: TestClient):
+        from fastapi import HTTPException as FHE
+
+        with patch("app.main.suggest_recipe_stage") as mock_stage:
+            mock_stage.side_effect = FHE(
+                status_code=422,
+                detail={"stage": "ingredients", "message": "bad ingredients", "attempts": 3},
+            )
+            resp = client.post(
+                "/recipes/suggest/stage",
+                json={"stage": "ingredients", "recipe": {"name": "שקשוקה"}},
+            )
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == {
+            "stage": "ingredients",
+            "message": "bad ingredients",
+            "attempts": 3,
+        }

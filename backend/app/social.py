@@ -10,6 +10,10 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from app.observability import get_logger, trace_call
+
+logger = get_logger(__name__)
+
 _PLATFORM_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("instagram", re.compile(r"instagram\.com/(p|reel|tv)/")),
     ("facebook",  re.compile(r"(facebook\.com|fb\.watch)")),
@@ -17,14 +21,18 @@ _PLATFORM_PATTERNS: list[tuple[str, re.Pattern]] = [
 ]
 
 
+@trace_call
 def detect_platform(url: str) -> Optional[str]:
     """Return the social platform name for *url*, or None if not recognised."""
     for platform, pattern in _PLATFORM_PATTERNS:
         if pattern.search(url):
+            logger.info("Detected social platform '%s' for URL", platform)
             return platform
+    logger.info("No supported social platform detected for URL")
     return None
 
 
+@trace_call
 def fetch_social_description(url: str) -> str:
     """
     Fetch the description/caption for a public social media post via yt-dlp.
@@ -47,4 +55,6 @@ def fetch_social_description(url: str) -> str:
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
-    return info.get("description") or ""
+    description = info.get("description") or ""
+    logger.info("Fetched social description len=%s", len(description))
+    return description

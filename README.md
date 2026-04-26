@@ -1,31 +1,25 @@
-# 🍳 SousChef API
+# 🍳 SousChef
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111+-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
-[![SQLModel](https://img.shields.io/badge/SQLModel-ORM-blueviolet)](https://sqlmodel.tiangolo.com/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.35+-FF4B4B?logo=streamlit)](https://streamlit.io/)
 [![Gemini](https://img.shields.io/badge/Gemini-2.5--flash-orange?logo=google)](https://ai.google.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A production-ready REST API for managing recipes — built with **FastAPI**, **SQLModel**, and **SQLite**. Ships with an AI-powered import feature that uses **Google Gemini 2.5 Flash** to extract structured recipes from any URL or free-form text, including **Instagram Reels, Facebook posts, and YouTube videos**. All AI-extracted content is returned in Hebrew.
-
-> *Your AI sous-chef in the terminal.*
-
-> 📚 **EX1 – EASS 2026, Class IX @ HIT**
-> This project will be extended in EX2 (Streamlit UI / Typer CLI) and EX3 (multi-service stack).
+A recipe manager with a **Streamlit UI** and a **FastAPI** backend. Import recipes from any URL (including Instagram, YouTube, Facebook), paste raw text, or create them manually. All AI-extracted content is returned in Hebrew.
 
 ---
 
 ## ✨ Features
 
-- **Full CRUD** for recipes, ingredients, and steps
-- **Nested creation** — supply ingredients and steps inline when creating a recipe
-- **Category filtering** on the list endpoint (`?category=breakfast`)
-- **Cascade deletes** — removing a recipe removes all its ingredients and steps
-- **AI import from URL** — auto-detects social media links (Instagram, Facebook, YouTube) or fetches any recipe page via JSON-LD / visible text scraping
-- **AI import from text/image** — paste raw text or upload a photo; Gemini extracts the recipe
-- **Hebrew output** — all AI-imported recipes are extracted in Hebrew
-- **Docker + Docker Compose** — fully containerised, SQLite persisted via volume
-- **34 pytest tests** — in-memory DB, all external calls mocked, zero network access required
+- **Full CRUD** for recipes, ingredients, and steps via a polished Hebrew RTL UI
+- **AI import from URL** — paste any recipe link; detects Instagram/Facebook/YouTube automatically
+- **AI import from text/image** — paste text or upload a photo; Gemini extracts the recipe
+- **AI recipe suggestion** — generate a complete recipe draft with one click
+- **AI enhance tips** — get improvement suggestions for any saved recipe
+- **AI search** — ask in natural language what to cook and get a recommendation from your saved recipes
+- **Category filtering** and **full-text search** on the recipe grid
+- **Docker Compose** — full stack with a single command
 
 ---
 
@@ -33,120 +27,224 @@ A production-ready REST API for managing recipes — built with **FastAPI**, **S
 
 ```
 souschef/
-├── app/
-│   ├── __init__.py
-│   ├── main.py          # FastAPI app, all routers, lifespan startup
-│   ├── database.py      # SQLite engine + get_session dependency
-│   ├── models.py        # SQLModel table models (Recipe, Ingredient, Step)
-│   ├── schemas.py       # Pydantic request/response schemas
-│   ├── ai.py            # Gemini 2.5 Flash integration + JSON-LD scraping
-│   └── social.py        # Social media description extractor (yt-dlp)
+├── backend/                    # FastAPI REST API
+│   ├── app/
+│   │   ├── main.py             # All routes
+│   │   ├── models.py           # SQLModel table models
+│   │   ├── schemas.py          # Pydantic request/response schemas
+│   │   ├── database.py         # SQLite engine + session dependency
+│   │   ├── ai.py               # Gemini integration + scraping strategies
+│   │   ├── social.py           # Social media extractor (yt-dlp)
+│   │   └── observability.py    # Structured logging
+│   ├── tests/
+│   │   └── test_recipes.py     # 34 pytest tests (in-memory DB, mocked AI)
+│   ├── Dockerfile
+│   └── pyproject.toml
+├── frontend/                   # Streamlit UI
+│   ├── main.py                 # Entry point
+│   ├── app/
+│   │   ├── config.py           # Constants and env vars
+│   │   ├── styles.py           # CSS / theming
+│   │   ├── api_client.py       # HTTP helpers wrapping the backend API
+│   │   ├── state.py            # Session-state helpers and navigation
+│   │   ├── components.py       # Shared UI components (header, cards, drawer)
+│   │   └── pages/
+│   │       ├── recipes.py      # Recipe grid + AI search
+│   │       ├── create.py       # Create / AI-suggest recipe
+│   │       ├── url_import.py   # Import from URL
+│   │       └── text_import.py  # Import from text / image
+│   ├── Dockerfile
+│   └── pyproject.toml
 ├── tests/
-│   └── test_recipes.py  # 34 pytest tests across 8 test classes
-├── Dockerfile
+│   └── e2e/                    # Playwright end-to-end tests
+│       ├── test_ui.py
+│       ├── conftest.py         # Spins up backend + frontend per session
+│       └── mock_ollama.py      # Mock AI server for offline testing
 ├── docker-compose.yml
-├── pyproject.toml       # uv-managed dependencies
-├── requirements.txt
-├── .env.example
-└── README.md
+└── .env.example
 ```
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Running Locally (two terminals)
 
 ### Prerequisites
 
 - Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - A free [Gemini API key](https://aistudio.google.com/app/apikey)
-- [uv](https://docs.astral.sh/uv/) *(recommended)* or pip
 
-### 1. Clone & configure
+### 1. Configure environment
 
 ```bash
-git clone <repo-url>
-cd souschef
 cp .env.example .env
+# Open .env and set: GEMINI_API_KEY=your_actual_key_here
 ```
 
-Open `.env` and set your key:
+### 2. Start the backend (terminal 1)
 
-```env
-GEMINI_API_KEY=your_actual_key_here
-```
-
-### 2. Install dependencies
-
-**With uv (recommended):**
 ```bash
-# Install uv (Windows PowerShell)
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-
-# Install uv (macOS / Linux)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Create venv and install
+cd backend
 uv sync --extra dev
-source .venv/bin/activate        # macOS / Linux
-.venv\Scripts\activate           # Windows
-```
-
-**With pip:**
-```bash
-python -m venv venv
-source venv/bin/activate         # macOS / Linux
-venv\Scripts\activate            # Windows
-pip install -r requirements.txt
-```
-
-### 3. Run the server
-
-```bash
+source .venv/bin/activate      # macOS / Linux
+# .venv\Scripts\activate       # Windows
 uvicorn app.main:app --reload
 ```
 
-| | |
-|---|---|
-| **API base** | http://localhost:8000 |
-| **Swagger UI** | http://localhost:8000/docs |
-| **ReDoc** | http://localhost:8000/redoc |
+The API will be available at **http://localhost:8000** (Swagger UI at `/docs`).
+
+### 3. Start the frontend (terminal 2)
+
+```bash
+cd frontend
+uv sync
+source .venv/bin/activate      # macOS / Linux
+# .venv\Scripts\activate       # Windows
+streamlit run main.py
+```
+
+The UI will open at **http://localhost:8501**.
+
+Both services communicate over `http://localhost:8000` by default. Override with `API_BASE_URL=http://...` if your backend runs on a different port.
 
 ---
 
-## 🐳 Docker
+## 🐳 Docker (full stack)
 
 ```bash
-# Build and start
+cp .env.example .env           # set GEMINI_API_KEY first
 docker compose up --build
-
-# Run in background
-docker compose up --build -d
-
-# Stop
-docker compose down
 ```
 
-The SQLite database is persisted to `./data/recipes.db` on your host machine via a volume mount, so data survives container restarts.
+| Service | URL |
+|---|---|
+| Streamlit UI | http://localhost:8501 |
+| FastAPI (REST + Swagger) | http://localhost:8000/docs |
+
+The SQLite database is persisted to `./data/recipes.db` via a volume mount.
+
+---
+
+## 🦙 Running with a local AI (no API key)
+
+### Option A — Ollama
+
+[Ollama](https://ollama.com/) lets you run the AI features entirely offline.
+
+#### 1. Install Ollama and pull a model
+
+```bash
+# macOS
+brew install ollama
+ollama pull gemma4:26b      # vision-capable; needed for image upload
+```
+
+> Any vision-capable model works. `gemma4:26b` is the tested default.
+> For a faster but less accurate option try `llava:13b`.
+
+#### 2. Configure `.env`
+
+```env
+AI_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=gemma4:26b
+# OLLAMA_TIMEOUT=180        # increase if generation times out
+```
+
+#### 3. Start everything
+
+**Local (two terminals):**
+```bash
+# terminal 1 — backend
+cd backend && uvicorn app.main:app --reload
+
+# terminal 2 — frontend
+cd frontend && streamlit run main.py
+```
+
+**Docker — set `OLLAMA_BASE_URL` if Ollama runs on the host:**
+```bash
+# In .env, set:
+# OLLAMA_BASE_URL=http://host.docker.internal:11434
+docker compose up --build
+```
+
+---
+
+### Option B — llama.cpp (llama-server)
+
+llama.cpp's `llama-server` exposes an OpenAI-compatible API that SousChef talks to directly.
+
+#### 1. Build or install llama-server
+
+```bash
+# macOS (Homebrew)
+brew install llama.cpp
+
+# or build from source:
+# https://github.com/ggml-org/llama.cpp#build
+```
+
+#### 2. Download a GGUF model and start the server
+
+```bash
+# Example: Llama 3.2 Vision (supports image upload)
+llama-server -m llama-3.2-11b-vision-instruct-q4_k_m.gguf \
+             --port 8080 --ctx-size 4096
+```
+
+> For image upload support (`/recipes/from-text` with a photo) the model must be vision-capable.
+> Text-only models work fine for all other features.
+
+#### 3. Configure `.env`
+
+```env
+AI_PROVIDER=llamacpp
+LLAMACPP_BASE_URL=http://localhost:8080
+# LLAMACPP_MAX_TOKENS=900
+# LLAMACPP_TIMEOUT=180
+```
+
+#### 4. Start the backend and frontend
+
+```bash
+# terminal 1
+cd backend && uvicorn app.main:app --reload
+
+# terminal 2
+cd frontend && streamlit run main.py
+```
+
+**Docker — set `LLAMACPP_BASE_URL` if llama-server runs on the host:**
+```bash
+# In .env, set:
+# LLAMACPP_BASE_URL=http://host.docker.internal:8080
+docker compose up --build
+```
 
 ---
 
 ## 🧪 Tests
 
+### Backend unit tests (no API key or network needed)
+
 ```bash
-# Run all tests
-pytest
-
-# Verbose output with test names
-pytest -v
-
-# Run a specific test class
-pytest tests/test_recipes.py::TestCreateRecipe -v
-
-# Suppress the pytest cache (useful on some Windows setups)
-pytest -v -p no:cacheprovider
+cd backend
+pytest                                              # all 34 tests
+pytest tests/test_recipes.py::TestCreateRecipe -v  # specific class
 ```
 
-All 34 tests use an **in-memory SQLite database** and **mock every external call** (Gemini API, httpx) — no API key or network access needed.
+### End-to-end UI tests (Playwright)
+
+```bash
+cd tests/e2e
+pip install -r requirements.txt
+playwright install chromium
+pytest                          # runs with mock AI by default
+E2E_HEADED=1 pytest             # headed Chromium
+```
+
+The e2e suite boots the backend and frontend automatically and generates an HTML report in `tests/e2e/artifacts/latest/index.html`.
 
 ---
 
@@ -158,145 +256,73 @@ All 34 tests use an **in-memory SQLite database** and **mock every external call
 |--------|------|--------|-------------|
 | `POST` | `/recipes` | `201` | Create a recipe (with optional nested ingredients & steps) |
 | `GET` | `/recipes` | `200` | List all recipes — filter with `?category=<value>` |
-| `GET` | `/recipes/{id}` | `200` | Get a single recipe with all ingredients and steps |
+| `GET` | `/recipes/{id}` | `200` | Get a single recipe with ingredients and steps |
 | `PUT` | `/recipes/{id}` | `200` | Partially update a recipe's fields |
 | `DELETE` | `/recipes/{id}` | `204` | Delete a recipe (cascades to ingredients and steps) |
 
-### Ingredients
+### Ingredients & Steps
 
 | Method | Path | Status | Description |
 |--------|------|--------|-------------|
-| `POST` | `/recipes/{id}/ingredients` | `201` | Add an ingredient to a recipe |
+| `POST` | `/recipes/{id}/ingredients` | `201` | Add an ingredient |
 | `DELETE` | `/ingredients/{id}` | `204` | Remove an ingredient |
-
-### Steps
-
-| Method | Path | Status | Description |
-|--------|------|--------|-------------|
-| `POST` | `/recipes/{id}/steps` | `201` | Add a step to a recipe |
+| `POST` | `/recipes/{id}/steps` | `201` | Add a step |
 | `DELETE` | `/steps/{id}` | `204` | Remove a step |
 
-### AI Import
+### AI Endpoints
 
 | Method | Path | Status | Description |
 |--------|------|--------|-------------|
-| `POST` | `/recipes/from-url` | `201` | Fetch a URL and import the recipe via Gemini |
-| `POST` | `/recipes/from-text` | `201` | Import from pasted text and/or an uploaded image |
-
-#### How AI import works
-
-`/recipes/from-url` uses a three-stage extraction strategy, tried in order:
-1. **Social media** — if the URL is from Instagram, Facebook, or YouTube, the post/reel/video description is fetched via `yt-dlp` and sent to Gemini.
-2. **JSON-LD** — scans the page for a `schema.org/Recipe` object (embedded by most major recipe sites). When found, this clean structured data is sent directly to Gemini.
-3. **Visible text fallback** — strips nav/scripts/footers and sends the remaining text (+ `og:image` if available) to Gemini.
-
-`/recipes/from-text` accepts `multipart/form-data` with a `text` field and an optional `image` file.
-
-All extracted recipes are returned with fields in Hebrew.
-
----
-
-## 🔧 Example Requests
-
-<details>
-<summary><b>Create a recipe</b></summary>
-
-```bash
-curl -s -X POST http://localhost:8000/recipes \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "חביתה קלאסית",
-    "category": "ארוחת בוקר",
-    "prep_time": 5,
-    "cook_time": 5,
-    "servings": 1,
-    "ingredients": [
-      {"name": "eggs",   "amount": 3,    "unit": "whole"},
-      {"name": "butter", "amount": 1,    "unit": "tbsp"},
-      {"name": "salt",   "amount": 0.25, "unit": "tsp"}
-    ],
-    "steps": [
-      {"order": 1, "instruction": "Crack eggs into a bowl and whisk with salt."},
-      {"order": 2, "instruction": "Melt butter in a pan over medium heat."},
-      {"order": 3, "instruction": "Pour in eggs and fold gently until just set."}
-    ]
-  }' | python -m json.tool
-```
-</details>
-
-<details>
-<summary><b>List recipes / filter by category</b></summary>
-
-```bash
-# All recipes
-curl -s http://localhost:8000/recipes | python -m json.tool
-
-# Only breakfast recipes
-curl -s "http://localhost:8000/recipes?category=ארוחת%20בוקר" | python -m json.tool
-```
-</details>
-
-<details>
-<summary><b>Update a recipe</b></summary>
-
-```bash
-curl -s -X PUT http://localhost:8000/recipes/1 \
-  -H "Content-Type: application/json" \
-  -d '{"description": "A quick French-style omelette.", "servings": 2}' \
-  | python -m json.tool
-```
-</details>
-
-<details>
-<summary><b>AI import from a URL</b></summary>
-
-```bash
-# Any recipe website
-curl -s -X POST http://localhost:8000/recipes/from-url \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://www.allrecipes.com/recipe/10813/best-chocolate-chip-cookies/"}' \
-  | python -m json.tool
-
-# Instagram Reel
-curl -s -X POST http://localhost:8000/recipes/from-url \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://www.instagram.com/reel/DWcViuMiK0u/"}' \
-  | python -m json.tool
-```
-</details>
-
-<details>
-<summary><b>AI import from text</b></summary>
-
-```bash
-# Text only
-curl -s -X POST http://localhost:8000/recipes/from-text \
-  -F "text=Banana Bread: Mash 3 ripe bananas. Mix with 1/3 cup melted butter, 3/4 cup sugar, 1 egg, 1 tsp vanilla, 1 tsp baking soda, pinch of salt, 1.5 cups flour. Bake at 175°C for 60 minutes." \
-  | python -m json.tool
-
-# Text + image file
-curl -s -X POST http://localhost:8000/recipes/from-text \
-  -F "text=Extract the recipe from this photo" \
-  -F "image=@/path/to/recipe_photo.jpg" \
-  | python -m json.tool
-```
-</details>
-
-<details>
-<summary><b>Delete a recipe</b></summary>
-
-```bash
-curl -s -X DELETE http://localhost:8000/recipes/1 -w "Status: %{http_code}\n"
-```
-</details>
+| `POST` | `/recipes/from-url` | `201` | Import and save a recipe from a URL |
+| `POST` | `/recipes/from-url/preview` | `200` | Extract a recipe from a URL without saving |
+| `POST` | `/recipes/from-text` | `201` | Import from text / image upload |
+| `GET` | `/recipes/{id}/enhance` | `200` | Get AI improvement tips for a recipe |
+| `POST` | `/recipes/recommend` | `200` | Recommend a recipe from your list based on a query |
+| `POST` | `/recipes/suggest/stage` | `200` | Generate one stage of a recipe draft |
 
 ---
 
 ## ⚙️ Environment Variables
 
+Copy `.env.example` to `.env` and edit as needed. The key choice is `AI_PROVIDER`.
+
+### AI provider
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_PROVIDER` | `gemini` | `gemini` (cloud), `ollama` (local), or `llamacpp` (local) |
+
+### Gemini (cloud) — `AI_PROVIDER=gemini`
+
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GEMINI_API_KEY` | Yes (for AI import) | Google Gemini API key — get one free at [aistudio.google.com](https://aistudio.google.com/app/apikey) |
+| `GEMINI_API_KEY` | Yes | Get one free at [aistudio.google.com](https://aistudio.google.com/app/apikey) |
+| `GEMINI_MODEL` | No | Override model (default: `gemini-2.5-flash`) |
+
+### Ollama (local) — `AI_PROVIDER=ollama`
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama daemon URL. Use `http://host.docker.internal:11434` when the backend runs in Docker and Ollama is on the host |
+| `OLLAMA_MODEL` | `gemma4:26b` | Model to use. Must be vision-capable for image uploads (`/recipes/from-text`) |
+| `OLLAMA_TIMEOUT` | `180` | Seconds before a request times out — local generation can be slow |
+
+### llama.cpp (local) — `AI_PROVIDER=llamacpp`
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLAMACPP_BASE_URL` | `http://localhost:8080` | llama-server URL. Use `http://host.docker.internal:8080` when the backend runs in Docker |
+| `LLAMACPP_MAX_TOKENS` | `900` | Maximum tokens to generate |
+| `LLAMACPP_TIMEOUT` | `180` | Request timeout in seconds |
+
+### Frontend / ports
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `API_BASE_URL` | `http://localhost:8000` | Frontend → backend base URL |
+| `AI_IMPORT_TIMEOUT` | `180` | Frontend-side timeout for AI import requests |
+| `BACKEND_PORT` | `8000` | Backend port (Docker Compose) |
+| `FRONTEND_PORT` | `8501` | Frontend port (Docker Compose) |
 
 ---
 
@@ -304,15 +330,17 @@ curl -s -X DELETE http://localhost:8000/recipes/1 -w "Status: %{http_code}\n"
 
 | Layer | Technology |
 |-------|-----------|
-| Web framework | [FastAPI](https://fastapi.tiangolo.com/) |
-| ORM / validation | [SQLModel](https://sqlmodel.tiangolo.com/) (SQLAlchemy + Pydantic) |
-| Database | SQLite (file-based, zero config) |
-| AI extraction | [Google Gemini 2.5 Flash](https://ai.google.dev/) via `google-genai` |
-| HTTP client | [httpx](https://www.python-httpx.org/) |
+| UI | [Streamlit](https://streamlit.io/) |
+| API | [FastAPI](https://fastapi.tiangolo.com/) + [Uvicorn](https://www.uvicorn.org/) |
+| ORM | [SQLModel](https://sqlmodel.tiangolo.com/) (SQLAlchemy + Pydantic) |
+| Database | SQLite |
+| AI — cloud | [Google Gemini 2.5 Flash](https://ai.google.dev/) via `google-genai` |
+| AI — local | [Ollama](https://ollama.com/) · [llama.cpp](https://github.com/ggml-org/llama.cpp) (llama-server) |
 | HTML parsing | [BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/) |
-| Social media | [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Instagram, Facebook, YouTube) |
+| Social media | [yt-dlp](https://github.com/yt-dlp/yt-dlp) |
+| HTTP client | [httpx](https://www.python-httpx.org/) (backend) · [requests](https://requests.readthedocs.io/) (frontend) |
 | Package manager | [uv](https://docs.astral.sh/uv/) |
-| Testing | [pytest](https://pytest.org/) |
+| Testing | [pytest](https://pytest.org/) + [Playwright](https://playwright.dev/python/) |
 | Containerisation | Docker + Docker Compose |
 
 ---

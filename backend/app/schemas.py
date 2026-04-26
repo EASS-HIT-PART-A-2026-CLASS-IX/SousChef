@@ -1,5 +1,5 @@
-from typing import Optional, List
-from pydantic import BaseModel, AnyHttpUrl, field_validator, model_validator
+from typing import Any, Literal, Optional, List
+from pydantic import BaseModel, AnyHttpUrl, Field, field_validator
 
 
 VALID_CATEGORIES = {"ארוחת בוקר", "ארוחת צהריים", "ארוחת ערב", "קינוח", "חטיף", "אחר"}
@@ -174,3 +174,24 @@ class ImportFromURLRequest(BaseModel):
 
 # ImportFromTextRequest is intentionally omitted — the /recipes/from-text
 # endpoint uses multipart/form-data (Form + UploadFile), not a JSON body.
+
+
+class RecommendRequest(BaseModel):
+    query: str
+    recipe_names: List[str] = []
+
+
+SuggestStage = Literal["name", "description", "meta", "ingredients", "steps"]
+
+
+class SuggestStageRequest(BaseModel):
+    stage: SuggestStage
+    recipe: dict[str, Any] = Field(default_factory=dict)
+    prompt: str | None = None
+
+
+class SuggestStageResponse(BaseModel):
+    stage: SuggestStage
+    patch: dict[str, Any]
+    recipe: dict[str, Any]
+    done: bool

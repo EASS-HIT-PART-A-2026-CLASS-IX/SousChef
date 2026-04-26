@@ -1,0 +1,5 @@
+pytest>=8.2
+pytest-playwright>=0.5
+playwright>=1.45
+requests>=2.31
+# Backend + frontend deps must already be installed (see backend/pyproject.toml)
