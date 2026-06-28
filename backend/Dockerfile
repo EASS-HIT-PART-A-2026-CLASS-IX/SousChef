@@ -6,13 +6,11 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-# Copy dependency manifest first for better layer caching
-COPY pyproject.toml ./
+# Copy dependency manifests first for better layer caching
+COPY pyproject.toml uv.lock ./
 
-# Install all dependencies into a virtual environment
-RUN uv venv /app/.venv && \
-    uv pip install --python /app/.venv/bin/python \
-    fastapi "uvicorn[standard]" sqlmodel python-dotenv httpx beautifulsoup4 google-genai
+# Install all locked runtime dependencies into a virtual environment (no drift)
+RUN uv sync --frozen --no-install-project --no-dev
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM python:3.11-slim
