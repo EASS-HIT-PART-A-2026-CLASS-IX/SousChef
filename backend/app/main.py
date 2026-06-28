@@ -46,6 +46,8 @@ from app.schemas import (  # noqa: E402
     StepRead,
     VALID_CATEGORIES,
 )
+from fastapi.security import OAuth2PasswordRequestForm  # noqa: E402
+from app import auth  # noqa: E402
 
 
 @trace_call
@@ -334,13 +336,30 @@ def update_recipe(
     return _build_recipe_read(recipe)
 
 
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
+@app.post("/token")
+@trace_call
+def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()) -> dict:
+    """Issue a JWT for the configured admin user (form fields: username, password)."""
+    if not auth.authenticate(form_data.username, form_data.password):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = auth.create_access_token({"sub": form_data.username, "role": "admin"})
+    return {"access_token": token, "token_type": "bearer"}
+
+
 @app.delete("/recipes/{recipe_id}", status_code=204, response_model=None)
 @trace_call
 def delete_recipe(
     recipe_id: int,
     session: Session = Depends(get_session),
+    current_user: dict = Depends(auth.get_current_user),
 ) -> None:
-    """Delete a recipe and all its ingredients/steps (cascade)."""
+    """Delete a recipe and all its ingredients/steps (cascade). Admin only."""
     recipe = _get_recipe_or_404(recipe_id, session)
     session.delete(recipe)
     session.commit()

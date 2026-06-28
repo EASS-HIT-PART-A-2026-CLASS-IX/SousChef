@@ -38,10 +38,16 @@ def session_fixture():
 
 @pytest.fixture(name="client")
 def client_fixture(session: Session):
+    from app import auth
+
     def override_get_session():
         yield session
 
+    def override_get_current_user():
+        return {"sub": "admin", "role": "admin"}
+
     app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[auth.get_current_user] = override_get_current_user
     with TestClient(app) as client:
         yield client
     app.dependency_overrides.clear()
