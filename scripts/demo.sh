@@ -21,9 +21,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if [[ -z "${ADMIN_PASSWORD_HASH:-}" ]]; then
+  echo "ERROR: ADMIN_PASSWORD_HASH is not set. The auth step will fail." >&2
+  echo "Generate one and add it to .env / your shell, e.g.:" >&2
+  echo "  cd backend && python -c \"from app import auth; print(auth.hash_password('admin'))\"" >&2
+  echo "It must be the hash of ADMIN_PASSWORD (default 'admin')." >&2
+  exit 1
+fi
+
 header "1/6  Starting the backend (uvicorn, detached)"
 ( cd backend && source .venv/bin/activate && \
-  uvicorn app.main:app --port 8000 >/tmp/souschef-demo.log 2>&1 ) &
+  exec uvicorn app.main:app --port 8000 >/tmp/souschef-demo.log 2>&1 ) &
 BACKEND_PID=$!
 echo "backend pid: ${BACKEND_PID}  (logs: /tmp/souschef-demo.log)"
 
@@ -32,8 +40,8 @@ for i in $(seq 1 30); do
   if curl -fsS "${API}/recipes" >/dev/null 2>&1; then
     echo "backend healthy after ${i}s"; break
   fi
-  sleep 1
   if [[ "${i}" -eq 30 ]]; then echo "backend did not become healthy"; exit 1; fi
+  sleep 1
 done
 
 header "3/6  Smoke test: create a recipe"
