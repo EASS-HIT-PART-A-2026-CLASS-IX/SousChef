@@ -19,7 +19,9 @@ A recipe manager with a **Streamlit UI** and a **FastAPI** backend. Import recip
 - **AI enhance tips** — get improvement suggestions for any saved recipe
 - **AI search** — ask in natural language what to cook and get a recommendation from your saved recipes
 - **Category filtering** and **full-text search** on the recipe grid
-- **Docker Compose** — full stack with a single command
+- **JWT authentication** — bcrypt-hashed admin credential, a `/token` endpoint, and a role-gated `DELETE /recipes/{id}`
+- **Async refresh worker** — a Redis-backed background service that pre-warms AI enhancement tips with bounded concurrency, retries, and idempotency
+- **Docker Compose** — full stack (backend, frontend, Redis, worker) with a single command
 
 ---
 
@@ -35,13 +37,18 @@ souschef/
 │   │   ├── database.py         # SQLite engine + session dependency
 │   │   ├── ai.py               # Gemini integration + scraping strategies
 │   │   ├── social.py           # Social media extractor (yt-dlp)
+│   │   ├── auth.py             # JWT issuance/validation + bcrypt hashing
 │   │   └── observability.py    # Structured logging
 │   ├── tests/
-│   │   └── test_recipes.py     # 34 pytest tests (in-memory DB, mocked AI)
+│   │   ├── test_recipes.py     # CRUD + AI import tests (in-memory DB, mocked AI)
+│   │   ├── test_auth.py        # JWT auth tests
+│   │   └── test_refresh.py     # Async refresh worker tests (anyio)
 │   ├── Dockerfile
 │   └── pyproject.toml
 ├── frontend/                   # Streamlit UI
 │   ├── main.py                 # Entry point
+│   ├── .streamlit/
+│   │   └── config.toml         # Pinned light theme for the cream RTL UI
 │   ├── app/
 │   │   ├── config.py           # Constants and env vars
 │   │   ├── styles.py           # CSS / theming
@@ -60,6 +67,12 @@ souschef/
 │       ├── test_ui.py
 │       ├── conftest.py         # Spins up backend + frontend per session
 │       └── mock_ollama.py      # Mock AI server for offline testing
+├── scripts/
+│   ├── refresh.py              # Async Redis-backed refresh worker
+│   └── demo.sh                 # 2-minute end-to-end demo script
+├── docs/
+│   ├── EX3-notes.md            # Architecture, refresh trace, JWT rotation
+│   └── runbooks/compose.md     # Compose operations runbook
 ├── compose.yaml
 └── .env.example
 ```
@@ -112,16 +125,27 @@ Both services communicate over `http://localhost:8000` by default. Override with
 ## 🐳 Docker (full stack)
 
 ```bash
-cp .env.example .env           # set GEMINI_API_KEY first
+cp .env.example .env           # set GEMINI_API_KEY + ADMIN_PASSWORD_HASH first
 docker compose up --build
 ```
 
-| Service | URL |
-|---|---|
-| Streamlit UI | http://localhost:8501 |
-| FastAPI (REST + Swagger) | http://localhost:8000/docs |
+The stack runs four services:
 
-The SQLite database is persisted to `./data/recipes.db` via a volume mount.
+| Service | Description | URL |
+|---|---|---|
+| `frontend` | Streamlit UI | http://localhost:8501 |
+| `backend` | FastAPI (REST + Swagger) | http://localhost:8000/docs |
+| `redis` | Idempotency store for the worker | `localhost:6379` |
+| `worker` | Async refresh worker (`scripts/refresh.py`) | — |
+
+The SQLite database is persisted to `./data/recipes.db` and Redis data to a named volume.
+
+> Generate the admin password hash for `.env` with:
+> ```bash
+> cd backend && python -c "from app import auth; print(auth.hash_password('admin'))"
+> ```
+
+See [`docs/runbooks/compose.md`](docs/runbooks/compose.md) for operations (health checks, running the worker manually, running tests in Docker) and [`docs/EX3-notes.md`](docs/EX3-notes.md) for the architecture and JWT rotation steps. A quick end-to-end walkthrough is available via `bash scripts/demo.sh`.
 
 ---
 
@@ -230,9 +254,12 @@ docker compose up --build
 
 ```bash
 cd backend
-pytest                                              # all 34 tests
-pytest tests/test_recipes.py::TestCreateRecipe -v  # specific class
+pytest                                              # all tests (CRUD, AI import, auth, worker)
+pytest tests/test_auth.py -v                        # JWT auth suite
+pytest tests/test_refresh.py -v                     # async refresh worker (anyio)
 ```
+
+All external calls (Gemini, httpx, Redis) are mocked, so no network or API key is needed.
 
 ### End-to-end UI tests (Playwright)
 
@@ -258,7 +285,15 @@ The e2e suite boots the backend and frontend automatically and generates an HTML
 | `GET` | `/recipes` | `200` | List all recipes — filter with `?category=<value>` |
 | `GET` | `/recipes/{id}` | `200` | Get a single recipe with ingredients and steps |
 | `PUT` | `/recipes/{id}` | `200` | Partially update a recipe's fields |
-| `DELETE` | `/recipes/{id}` | `204` | Delete a recipe (cascades to ingredients and steps) |
+| `DELETE` | `/recipes/{id}` | `204` | Delete a recipe (cascades). **Requires a Bearer admin token** |
+
+### Auth
+
+| Method | Path | Status | Description |
+|--------|------|--------|-------------|
+| `POST` | `/token` | `200` | Exchange admin `username` + `password` (form fields) for a JWT (`{"access_token", "token_type"}`) |
+
+Protected routes expect an `Authorization: Bearer <token>` header; the token must carry `role: "admin"` (otherwise `401`/`403`).
 
 ### Ingredients & Steps
 
@@ -324,6 +359,26 @@ Copy `.env.example` to `.env` and edit as needed. The key choice is `AI_PROVIDER
 | `BACKEND_PORT` | `8000` | Backend port (Docker Compose) |
 | `FRONTEND_PORT` | `8501` | Frontend port (Docker Compose) |
 
+### Auth (JWT)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JWT_SECRET_KEY` | `change-me-in-production` | HMAC secret used to sign/verify tokens |
+| `JWT_ALGORITHM` | `HS256` | JWT signing algorithm |
+| `JWT_EXPIRE_MINUTES` | `30` | Token lifetime in minutes |
+| `ADMIN_USERNAME` | `admin` | Admin username for `/token` |
+| `ADMIN_PASSWORD_HASH` | — | bcrypt hash of the admin password (backend validates against this) |
+| `ADMIN_PASSWORD` | — | Plaintext admin password, used **only by the frontend** to obtain a token for protected calls (must match `ADMIN_PASSWORD_HASH`) |
+
+### Redis + async refresh worker
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection (Compose sets `redis://redis:6379`) |
+| `REFRESH_CONCURRENCY` | `5` | Max recipes refreshed concurrently |
+| `REFRESH_TTL` | `3600` | Idempotency key TTL in seconds |
+| `REFRESH_INTERVAL` | `300` | Seconds the worker sleeps between refresh cycles |
+
 ---
 
 ## 🛠️ Tech Stack
@@ -334,6 +389,8 @@ Copy `.env.example` to `.env` and edit as needed. The key choice is `AI_PROVIDER
 | API | [FastAPI](https://fastapi.tiangolo.com/) + [Uvicorn](https://www.uvicorn.org/) |
 | ORM | [SQLModel](https://sqlmodel.tiangolo.com/) (SQLAlchemy + Pydantic) |
 | Database | SQLite |
+| Cache / idempotency | [Redis](https://redis.io/) (async client) |
+| Auth | [PyJWT](https://pyjwt.readthedocs.io/) + [bcrypt](https://github.com/pyca/bcrypt/) |
 | AI — cloud | [Google Gemini 2.5 Flash](https://ai.google.dev/) via `google-genai` |
 | AI — local | [Ollama](https://ollama.com/) · [llama.cpp](https://github.com/ggml-org/llama.cpp) (llama-server) |
 | HTML parsing | [BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/) |
