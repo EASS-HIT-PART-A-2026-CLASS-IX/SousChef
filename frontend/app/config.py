@@ -3,6 +3,13 @@ import os
 API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000")
 AI_IMPORT_TIMEOUT = int(os.getenv("AI_IMPORT_TIMEOUT", "180"))
 
+# Admin credentials used for service-to-service auth against protected backend
+# routes (e.g. DELETE /recipes/{id}). This is NOT a user-facing login screen —
+# the UI silently obtains a token on the user's behalf. ADMIN_PASSWORD must be
+# the plaintext whose bcrypt hash the backend stores in ADMIN_PASSWORD_HASH.
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+
 VALID_CATEGORIES = ["ארוחת בוקר", "ארוחת צהריים", "ארוחת ערב", "קינוח", "חטיף", "אחר"]
 
 CAT_KEY_MAP = {

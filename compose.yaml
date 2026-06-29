@@ -32,6 +32,11 @@ services:
     environment:
       - API_BASE_URL=http://backend:8000
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # Service-to-service admin auth so the UI can call protected routes
+      # (e.g. delete). Not a user-facing login. ADMIN_PASSWORD is the plaintext
+      # whose hash the backend stores in ADMIN_PASSWORD_HASH.
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     depends_on:
       backend:
         condition: service_healthy
