@@ -197,6 +197,12 @@ All text fields (name, description, category, ingredient names, and step instruc
   ]
 }}
 
+For description, prep_time, cook_time, and servings: if the content does not state them \
+explicitly, infer reasonable values yourself rather than returning null. Write a short \
+one-sentence Hebrew description summarizing the dish, and estimate prep_time and cook_time \
+in minutes and servings based on the ingredients and the steps. Use null only if you \
+genuinely cannot make a sensible estimate.
+
 Return ONLY the JSON object, no explanation, no markdown fences.
 Prefer compact, minified JSON on a single line.
 Keep ingredients and steps concise and include only the essential recipe data.
@@ -1116,22 +1122,24 @@ async def extract_recipe_from_url(url: str) -> dict:
 
     from app.social import detect_platform, fetch_social_description
 
-    if detect_platform(url):
+    platform = detect_platform(url)
+    if platform:
+        # Many social posts (notably Instagram) require a logged-in session, so
+        # an anonymous yt-dlp fetch fails or returns nothing. Surface a short,
+        # actionable Hebrew message and keep the raw error in the logs.
+        social_fallback_detail = (
+            f"לא ניתן לייבא אוטומטית מ-{platform}. ייתכן שהפוסט דורש התחברות "
+            "או אינו זמין לצפייה ללא חשבון. העתיקו את טקסט המתכון מהפוסט "
+            "והדביקו אותו בייבוא מטקסט."
+        )
         try:
             description = await asyncio.to_thread(fetch_social_description, url)
         except Exception as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Could not fetch social media post: {exc}",
-            )
+            logger.warning("Social fetch failed for platform=%s: %s", platform, exc)
+            raise HTTPException(status_code=422, detail=social_fallback_detail)
         if not description.strip():
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "The post description is empty. "
-                    "Please paste the recipe text using /recipes/from-text instead."
-                ),
-            )
+            logger.info("Social post description empty for platform=%s", platform)
+            raise HTTPException(status_code=422, detail=social_fallback_detail)
         return await asyncio.to_thread(extract_recipe_from_text, description)
 
     headers = {

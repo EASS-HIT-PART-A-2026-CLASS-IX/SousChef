@@ -1,0 +1,12 @@
+# Pin the Streamlit theme so rendering is deterministic regardless of the
+# viewer's OS/browser dark-mode preference. The app's custom CSS paints a warm
+# cream UI and only sets explicit colors on its own classes; without a fixed
+# light base, standard headings/labels/captions inherit a dark-theme (light)
+# text color and become unreadable on the cream background.
+[theme]
+base = "light"
+backgroundColor = "#FAF4EA"
+secondaryBackgroundColor = "#F1EAD9"
+primaryColor = "#C5552D"
+textColor = "#2A2118"
+font = "sans serif"

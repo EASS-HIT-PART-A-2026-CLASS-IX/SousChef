@@ -1,7 +1,35 @@
 import requests
 import streamlit as st
 
-from app.config import API_BASE
+from app.config import ADMIN_PASSWORD, ADMIN_USERNAME, API_BASE
+
+# Cached admin JWT for protected backend routes. Obtained on demand and
+# refreshed if the backend rejects it (expired/invalid).
+_token_cache: dict = {"token": None}
+
+
+def _get_admin_token(force_refresh: bool = False):
+    if _token_cache["token"] and not force_refresh:
+        return _token_cache["token"]
+    if not ADMIN_PASSWORD:
+        return None
+    try:
+        r = requests.post(
+            f"{API_BASE}/token",
+            data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+            timeout=8,
+        )
+        if r.ok:
+            _token_cache["token"] = r.json().get("access_token")
+            return _token_cache["token"]
+    except Exception:
+        return None
+    return None
+
+
+def _auth_headers(force_refresh: bool = False) -> dict:
+    token = _get_admin_token(force_refresh=force_refresh)
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 def _detail_message(detail) -> str:
@@ -90,8 +118,16 @@ def api_put(path: str, json_data: dict):
 
 def api_delete(path: str):
     try:
-        r = requests.delete(f"{API_BASE}{path}", timeout=8)
-        return r.status_code == 204
+        r = requests.delete(f"{API_BASE}{path}", headers=_auth_headers(), timeout=8)
+        if r.status_code == 401:
+            # Token missing/expired — refresh once and retry before giving up.
+            r = requests.delete(
+                f"{API_BASE}{path}", headers=_auth_headers(force_refresh=True), timeout=8
+            )
+        if r.status_code == 204:
+            return True
+        _show_error(r)
+        return False
     except Exception as e:
         st.error(f"שגיאה: {e}")
         return False

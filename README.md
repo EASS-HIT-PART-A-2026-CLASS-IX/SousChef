@@ -60,7 +60,7 @@ souschef/
 │       ├── test_ui.py
 │       ├── conftest.py         # Spins up backend + frontend per session
 │       └── mock_ollama.py      # Mock AI server for offline testing
-├── docker-compose.yml
+├── compose.yaml
 └── .env.example
 ```
 
