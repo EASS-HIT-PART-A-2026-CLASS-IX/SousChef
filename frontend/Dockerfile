@@ -5,9 +5,13 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 COPY pyproject.toml ./
+# Pin streamlit to the version in uv.lock (1.56.0). The app's RTL CSS targets
+# Streamlit's internal DOM (data-testid / emotion class names), which newer
+# releases rename — leaving this unpinned pulls a version whose markup the CSS
+# no longer matches, breaking the entire UI styling.
 RUN uv venv /app/.venv && \
     uv pip install --python /app/.venv/bin/python \
-        streamlit requests python-dotenv google-genai
+        streamlit==1.56.0 requests python-dotenv google-genai
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM python:3.11-slim
