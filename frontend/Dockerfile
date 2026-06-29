@@ -15,6 +15,7 @@ FROM python:3.11-slim
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY main.py ./
+COPY app/ ./app/
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV STREAMLIT_SERVER_HEADLESS=true
