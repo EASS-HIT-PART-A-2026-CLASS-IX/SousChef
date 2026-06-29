@@ -64,6 +64,10 @@ services:
       - REDIS_URL=redis://redis:6379
     volumes:
       - ./scripts:/app/scripts
+    # The worker reuses the backend image but runs no HTTP server, so the
+    # image's inherited HTTP healthcheck would always fail. Disable it.
+    healthcheck:
+      disable: true
     depends_on:
       backend:
         condition: service_healthy
