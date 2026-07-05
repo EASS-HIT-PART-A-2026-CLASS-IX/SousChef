@@ -254,12 +254,22 @@ docker compose up --build
 
 ```bash
 cd backend
-pytest                                              # all tests (CRUD, AI import, auth, worker)
+pytest                                              # all tests (CRUD, AI import, auth, worker, contract)
 pytest tests/test_auth.py -v                        # JWT auth suite
 pytest tests/test_refresh.py -v                     # async refresh worker (anyio)
+pytest tests/test_api_contract.py -v                # Schemathesis OpenAPI contract fuzzing
 ```
 
 All external calls (Gemini, httpx, Redis) are mocked, so no network or API key is needed.
+The same suite runs in CI on every push and pull request (`.github/workflows/ci.yml`).
+
+### Seed sample data
+
+With the API running, load three sample recipes (idempotent — safe to re-run):
+
+```bash
+uv run python scripts/seed.py
+```
 
 ### End-to-end UI tests (Playwright)
 
@@ -314,6 +324,14 @@ Protected routes expect an `Authorization: Bearer <token>` header; the token mus
 | `GET` | `/recipes/{id}/enhance` | `200` | Get AI improvement tips for a recipe |
 | `POST` | `/recipes/recommend` | `200` | Recommend a recipe from your list based on a query |
 | `POST` | `/recipes/suggest/stage` | `200` | Generate one stage of a recipe draft |
+
+### Ops
+
+| Method | Path | Status | Description |
+|--------|------|--------|-------------|
+| `GET` | `/health` | `200` | Liveness probe (`{"status": "ok", "version": ...}`). Exempt from rate limiting |
+
+Every other response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers; exceeding the per-IP budget returns `429` with `Retry-After`. See `docs/runbooks/compose.md` for how to verify.
 
 ---
 
@@ -370,6 +388,12 @@ Copy `.env.example` to `.env` and edit as needed. The key choice is `AI_PROVIDER
 | `ADMIN_PASSWORD_HASH` | — | bcrypt hash of the admin password (backend validates against this) |
 | `ADMIN_PASSWORD` | — | Plaintext admin password, used **only by the frontend** to obtain a token for protected calls (must match `ADMIN_PASSWORD_HASH`) |
 
+### Rate limiting
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RATE_LIMIT_PER_MINUTE` | `120` | Max requests per minute per client IP (`X-RateLimit-*` headers, `429` when exceeded). `0` or negative disables |
+
 ### Redis + async refresh worker
 
 | Variable | Default | Description |
@@ -399,6 +423,17 @@ Copy `.env.example` to `.env` and edit as needed. The key choice is `AI_PROVIDER
 | Package manager | [uv](https://docs.astral.sh/uv/) |
 | Testing | [pytest](https://pytest.org/) + [Playwright](https://playwright.dev/python/) |
 | Containerisation | Docker + Docker Compose |
+
+---
+
+## 🤖 AI Assistance
+
+Parts of this project were built with AI pair-programming tools (Claude Code, and the
+in-app AI features use Gemini / Ollama / llama.cpp as documented above). Typical prompts
+covered scaffolding FastAPI routes and tests, writing the async refresh worker, and
+drafting documentation. All AI-generated code was reviewed by hand and verified locally
+by running the pytest suites (backend unit + Schemathesis contract + Playwright e2e)
+and by exercising the flows through the Streamlit UI against `docker compose up`.
 
 ---
 
