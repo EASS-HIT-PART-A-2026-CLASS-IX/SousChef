@@ -7,14 +7,14 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
 from dotenv import load_dotenv
 
 # Must run before app.ai is imported so its module-level env-var reads pick up .env values
 load_dotenv()
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile  # noqa: E402
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Path, Query, Request, UploadFile  # noqa: E402
 from fastapi.concurrency import run_in_threadpool  # noqa: E402
 from sqlmodel import Session, select  # noqa: E402
 from app.observability import clear_request_id, configure_logging, get_logger, set_request_id, trace_call  # noqa: E402
@@ -46,8 +46,9 @@ from app.schemas import (  # noqa: E402
     StepRead,
     VALID_CATEGORIES,
 )
+from fastapi.responses import JSONResponse  # noqa: E402
 from fastapi.security import OAuth2PasswordRequestForm  # noqa: E402
-from app import auth  # noqa: E402
+from app import auth, ratelimit  # noqa: E402
 
 
 @trace_call
@@ -80,6 +81,10 @@ async def lifespan(app: FastAPI):
     create_db_and_tables()
     yield
 
+
+# SQLite rejects integers wider than a signed 64-bit; bound id path params so
+# out-of-range values get a 422 instead of an OverflowError-driven 500.
+RecordId = Annotated[int, Path(ge=1, le=2**63 - 1)]
 
 app = FastAPI(
     title="SousChef API",
@@ -117,6 +122,30 @@ async def log_requests(request: Request, call_next):
     )
     clear_request_id()
     return response
+
+
+@app.middleware("http")
+async def rate_limit(request: Request, call_next):
+    if request.url.path in ratelimit.EXEMPT_PATHS:
+        return await call_next(request)
+
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, headers = ratelimit.hit(client_ip)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded, try again soon"},
+            headers=headers,
+        )
+    response = await call_next(request)
+    response.headers.update(headers)
+    return response
+
+
+@app.get("/health")
+def health():
+    """Liveness probe. Exempt from rate limiting."""
+    return {"status": "ok", "version": app.version}
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -310,7 +339,7 @@ def list_recipes(
 @app.get("/recipes/{recipe_id}", response_model=RecipeRead)
 @trace_call
 def get_recipe(
-    recipe_id: int,
+    recipe_id: RecordId,
     session: Session = Depends(get_session),
 ) -> RecipeRead:
     """Get a single recipe by ID, including all ingredients and steps."""
@@ -321,7 +350,7 @@ def get_recipe(
 @app.put("/recipes/{recipe_id}", response_model=RecipeRead)
 @trace_call
 def update_recipe(
-    recipe_id: int,
+    recipe_id: RecordId,
     payload: RecipeUpdate,
     session: Session = Depends(get_session),
 ) -> RecipeRead:
@@ -355,7 +384,7 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()) -> 
 @app.delete("/recipes/{recipe_id}", status_code=204, response_model=None)
 @trace_call
 def delete_recipe(
-    recipe_id: int,
+    recipe_id: RecordId,
     session: Session = Depends(get_session),
     current_user: dict = Depends(auth.get_current_user),
 ) -> None:
@@ -370,7 +399,7 @@ def delete_recipe(
 @app.post("/recipes/{recipe_id}/ingredients", response_model=IngredientRead, status_code=201)
 @trace_call
 def add_ingredient(
-    recipe_id: int,
+    recipe_id: RecordId,
     payload: IngredientCreate,
     session: Session = Depends(get_session),
 ) -> IngredientRead:
@@ -386,7 +415,7 @@ def add_ingredient(
 @app.delete("/ingredients/{ingredient_id}", status_code=204, response_model=None)
 @trace_call
 def delete_ingredient(
-    ingredient_id: int,
+    ingredient_id: RecordId,
     session: Session = Depends(get_session),
 ) -> None:
     """Remove an ingredient by ID."""
@@ -402,7 +431,7 @@ def delete_ingredient(
 @app.post("/recipes/{recipe_id}/steps", response_model=StepRead, status_code=201)
 @trace_call
 def add_step(
-    recipe_id: int,
+    recipe_id: RecordId,
     payload: StepCreate,
     session: Session = Depends(get_session),
 ) -> StepRead:
@@ -418,7 +447,7 @@ def add_step(
 @app.delete("/steps/{step_id}", status_code=204, response_model=None)
 @trace_call
 def delete_step(
-    step_id: int,
+    step_id: RecordId,
     session: Session = Depends(get_session),
 ) -> None:
     """Remove a step by ID."""
@@ -481,7 +510,7 @@ async def import_from_text(
 @app.get("/recipes/{recipe_id}/enhance")
 @trace_call
 def enhance_recipe_tips(
-    recipe_id: int,
+    recipe_id: RecordId,
     session: Session = Depends(get_session),
 ) -> dict:
     """Return 3 AI-generated improvement tips for the recipe in Hebrew."""

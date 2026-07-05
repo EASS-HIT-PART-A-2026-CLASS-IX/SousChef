@@ -15,8 +15,11 @@ docker compose up --build
 ## 2. Verify backend health
 
 ```bash
-curl -fsS http://localhost:8000/recipes && echo "  <- backend OK"
+curl -fsS http://localhost:8000/health
+# {"status":"ok","version":"1.0.0"}
 ```
+
+(`/health` is exempt from rate limiting, so probes never consume request budget.)
 
 ## 3. Verify Redis is up
 
@@ -35,10 +38,22 @@ docker compose run --rm worker python /app/scripts/refresh.py
 
 (Ctrl-C to stop the loop, or run a one-shot variant in your shell.)
 
-## 5. Check health / response headers
+## 5. Check health / rate-limit headers
+
+Every non-`/health` response carries the rate-limit trio (limit is
+`RATE_LIMIT_PER_MINUTE`, default 120 per client IP per 60s window):
 
 ```bash
-curl -i http://localhost:8000/recipes | head -n 20
+curl -si http://localhost:8000/recipes | grep -i x-ratelimit
+# X-RateLimit-Limit: 120
+# X-RateLimit-Remaining: 119
+# X-RateLimit-Reset: 42
+```
+
+Exceeding the limit returns `429` with a `Retry-After` header:
+
+```bash
+for i in $(seq 1 130); do curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/recipes; done | sort | uniq -c
 ```
 
 Inspect the request-id correlation in logs:
@@ -51,6 +66,26 @@ docker compose logs backend | grep request_id
 
 ```bash
 docker compose run --rm backend pytest
+```
+
+## 6b. Schemathesis / pytest in CI
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull
+request: it installs the backend with `uv sync --extra dev` and runs
+`uv run pytest`, which includes `tests/test_api_contract.py` — Schemathesis
+fuzzing of the CRUD endpoints against the app's own OpenAPI schema
+(no 5xx allowed, responses must match the declared schema).
+
+Run the same thing locally:
+
+```bash
+cd backend && uv run pytest tests/test_api_contract.py -v
+```
+
+## 6c. Seed sample data
+
+```bash
+uv run python scripts/seed.py     # idempotent; API must be up
 ```
 
 ## 7. Stop everything cleanly

@@ -735,7 +735,9 @@ class TestOllamaJsonGuards:
         second.raise_for_status.return_value = None
         second.json.return_value = {"response": '{"name":"שקשוקה"}'}
 
-        with patch("app.ai.httpx.post", side_effect=[first, second]) as mock_post:
+        with patch("app.ai.httpx.Client") as mock_client_cls:
+            mock_post = mock_client_cls.return_value.__enter__.return_value.post
+            mock_post.side_effect = [first, second]
             result = ai._ollama_generate(
                 "Return recipe JSON",
                 schema={"type": "object", "properties": {"name": {"type": "string"}}},

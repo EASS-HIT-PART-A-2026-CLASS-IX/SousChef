@@ -1,5 +1,12 @@
 # EX3 Notes
 
+## Demo video
+
+[`docs/demo.mp4`](demo.mp4) (≈1:55) walks through every feature end-to-end:
+grid + search + category filters, AI search, recipe drawer, AI improvement
+tips, inline edit, AI-suggested recipe creation, import from free text,
+import from a live URL (auto-translated to Hebrew), and JWT-protected delete.
+
 ## Architecture
 
 ```
