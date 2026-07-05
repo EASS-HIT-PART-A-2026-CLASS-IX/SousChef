@@ -10,6 +10,12 @@ A recipe manager with a **Streamlit UI** and a **FastAPI** backend. Import recip
 
 ---
 
+## 🎬 Demo
+
+A ≤2-minute screen capture covering every feature end-to-end: [`docs/demo.mp4`](docs/demo.mp4)
+(search & filters, AI search, recipe drawer, AI improvement tips, inline edit, AI-suggested
+recipe creation, text import, live URL import, and JWT-protected delete).
+
 ## ✨ Features
 
 - **Full CRUD** for recipes, ingredients, and steps via a polished Hebrew RTL UI
